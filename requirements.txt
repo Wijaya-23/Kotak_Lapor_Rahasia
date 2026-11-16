@@ -1,0 +1,7 @@
+cryptography
+argon2-cffi
+opencv-python
+Pillow
+numpy
+psutil
+pytest

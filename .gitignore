@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Rahasia dan data sensitif: JANGAN PERNAH di-commit
+dongle.key
+*.key
+*.pem
+*.db
+*.sqlite3
+*.enc
+.env
+face_templates/
+stego_images/
+data/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
