@@ -213,7 +213,9 @@ class Database:
         return self.get_admin() is not None
 
     # ---------------------------------------------------- users
-    def add_user(self, user: UserRecord) -> None:
+    def add_user(self, user: UserRecord, wrapped_dek: str | None = None) -> None:
+        """Simpan pengguna, dan slot DEK-nya bila diberikan, dalam SATU transaksi:
+        tidak mungkin ada pengguna tanpa slot karena proses terhenti di tengah."""
         with self.conn:
             self.conn.execute(
                 """INSERT INTO users (id, username, role, pw_hash, kek_salt, dongle_id, dongle_serial,
@@ -225,6 +227,10 @@ class Database:
                     user.face_template_enc, user.failed_logins, user.locked_until,
                 ),
             )
+            if wrapped_dek is not None:
+                self.conn.execute(
+                    "INSERT INTO key_slots (user_id, wrapped_dek) VALUES (?, ?)", (user.id, wrapped_dek)
+                )
 
     def _user(self, where: str, value) -> UserRecord | None:
         row = self.conn.execute(f"SELECT * FROM users WHERE {where} = ?", (value,)).fetchone()

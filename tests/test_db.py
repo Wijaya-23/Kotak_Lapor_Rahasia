@@ -132,6 +132,16 @@ def test_key_slot_simpan_ganti_ambil(db, pelapor):
     assert db.get_key_slot(pelapor.id) == "slot-2"
 
 
+def test_user_dan_slot_disimpan_dalam_satu_transaksi(db):
+    a = _user()
+    db.add_user(a, wrapped_dek="slot-a")
+    assert db.get_key_slot(a.id) == "slot-a"
+    b = _user()
+    with pytest.raises(sqlite3.Error):
+        db.add_user(b, wrapped_dek=object())  # penyimpanan slot gagal di tengah jalan...
+    assert db.get_user(b.id) is None  # ...maka pengguna juga ikut dibatalkan
+
+
 def test_key_slot_harus_milik_user_yang_ada(db):
     with pytest.raises(sqlite3.IntegrityError):
         db.put_key_slot("tidak-ada", "slot")
