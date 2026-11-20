@@ -1,11 +1,12 @@
 """KLR versi terminal: inisialisasi Admin, login tiga faktor, daftar Pelapor,
-kirim dan baca laporan teks. Memakai flashdisk dan webcam asli.
+kirim dan baca laporan teks, kirim file dan simpan lampiran. Memakai flashdisk dan webcam asli.
 
 Pemakaian (dari folder proyek, venv aktif):
     python tools/coba_login.py
     python tools/coba_login.py --root D:\\dongle_pelapor   (dongle di folder, untuk uji tanpa flashdisk kedua)
 
-Basis data: data/klr.db (folder data/ ada di .gitignore). Hapus berkas itu untuk mulai dari nol,
+Basis data: data/klr.db, file terenkripsi: data/files/, lampiran yang dibuka Admin: data/unduhan/
+(folder data/ ada di .gitignore). Hapus berkas itu untuk mulai dari nol,
 dan hapus juga dongle.key di flashdisk karena sudah tidak terdaftar.
 """
 from __future__ import annotations
@@ -18,10 +19,13 @@ from getpass import getpass
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
-from klr import auth, camera, face, keys, textcrypto  # noqa: E402
+from klr import auth, camera, face, filecrypto, keys, textcrypto  # noqa: E402
 from klr import dongle as dg  # noqa: E402
 from klr.db import Database, new_id  # noqa: E402
 from klr.errors import KlrError  # noqa: E402
+
+FILES_DIR = os.path.join("data", "files")
+DOWNLOAD_DIR = os.path.join("data", "unduhan")
 
 
 def local_time(iso: str) -> str:
@@ -109,11 +113,32 @@ def send_report(db: Database, session: auth.Session) -> None:
     print(f"  paket hybrid (awal): {pkg[:60]}...")
 
 
+def send_file_report(db: Database, session: auth.Session) -> None:
+    path = input("Path file (boleh hasil 'Copy as path'): ").strip().strip('"')
+    note = input("Keterangan singkat (boleh kosong): ").strip()
+    admin_pub = keys.load_encryption_public_key(db.get_admin().enc_pubkey)
+    report_id, attachment_id = new_id(), new_id()
+    print("Mengenkripsi file...")
+    ef = filecrypto.encrypt_file(path, FILES_DIR, admin_pub, context=attachment_id)
+    try:
+        pkg = textcrypto.encrypt_text(note, admin_pub, report_id, session.user.id) if note else None
+        db.add_report(session.dek, report_id=report_id, reporter_id=session.user.id, kind="file", body_pkg=pkg)
+        db.add_attachment(session.dek, attachment_id=attachment_id, report_id=report_id, enc_path=ef.enc_path,
+                          size=ef.enc_size, filename=ef.meta.name)
+    except BaseException:
+        os.remove(ef.enc_path)
+        raise
+    print(f"Terkirim. id laporan: {report_id}")
+    print(f"  disimpan sebagai : {ef.enc_path}  ({ef.enc_size:,} byte)")
+    print(f"  SHA-256 asli     : {ef.meta.sha256}")
+    print(f"  SHA-256 .enc     : {ef.enc_sha256}")
+
+
 def my_reports(db: Database, session: auth.Session) -> None:
     reports = db.list_reports(session.dek, session.user.id)
     print(f"{len(reports)} laporan. Isi hanya bisa dibaca Admin; kamu hanya melihat status.")
     for r in reports:
-        print(f"  {local_time(r.created_at)}  {r.id[:8]}  status: {r.status}")
+        print(f"  {local_time(r.created_at)}  {r.id[:8]}  {r.kind:<6}  status: {r.status}")
 
 
 def read_reports(db: Database, session: auth.Session) -> None:
@@ -127,6 +152,25 @@ def read_reports(db: Database, session: auth.Session) -> None:
         print(f"\n  [{local_time(r.created_at)}] dari {reporter.username}  status: {r.status}  id: {r.id[:8]}")
         for line in isi.splitlines():
             print(f"    {line}")
+        for a in db.list_attachments(session.dek, r.id):
+            print(f"    lampiran: {a.filename}  ({a.size:,} byte terenkripsi)")
+
+
+def save_attachment(db: Database, session: auth.Session) -> None:
+    items = [a for r in db.list_reports(session.dek) for a in db.list_attachments(session.dek, r.id)]
+    if not items:
+        print("Belum ada lampiran.")
+        return
+    for i, a in enumerate(items, 1):
+        print(f"  {i}) {a.filename}  ({a.size:,} byte terenkripsi)")
+    pick = input("Nomor lampiran: ").strip()
+    if not pick.isdigit() or not 1 <= int(pick) <= len(items):
+        print("Nomor tidak valid.")
+        return
+    a = items[int(pick) - 1]
+    out, meta = filecrypto.decrypt_file(a.enc_path, session.admin_private_key, DOWNLOAD_DIR, context=a.id)
+    print(f"Tersimpan: {out}")
+    print(f"  ukuran {meta.size:,} byte, SHA-256 {meta.sha256} (cocok dengan metadata)")
 
 
 def main(argv=None) -> None:
@@ -150,9 +194,11 @@ def main(argv=None) -> None:
             if session is None:
                 menu = {"1": "Login", "0": "Keluar"}
             elif session.is_admin:
-                menu = {"2": "Daftarkan Pelapor", "4": "Baca semua laporan", "9": "Logout", "0": "Keluar"}
+                menu = {"2": "Daftarkan Pelapor", "4": "Baca semua laporan", "7": "Simpan lampiran", "9": "Logout",
+                        "0": "Keluar"}
             else:
-                menu = {"3": "Kirim laporan teks", "5": "Status laporan saya", "9": "Logout", "0": "Keluar"}
+                menu = {"3": "Kirim laporan teks", "5": "Status laporan saya", "6": "Kirim laporan file", "9": "Logout",
+                        "0": "Keluar"}
             who = f"[{session.user.username}]" if session else "[belum login]"
             print(who, "  ".join(f"{k}) {v}" for k, v in menu.items()))
             choice = input("> ").strip()
@@ -171,11 +217,15 @@ def main(argv=None) -> None:
                     read_reports(db, session)
                 elif choice == "5":
                     my_reports(db, session)
+                elif choice == "6":
+                    send_file_report(db, session)
+                elif choice == "7":
+                    save_attachment(db, session)
                 elif choice == "9":
                     session.logout()
                     session = None
                     print("Logout. Kunci di memori sudah dihapus.")
-            except (KlrError, ValueError) as exc:
+            except (KlrError, ValueError, OSError) as exc:
                 print(f"Gagal: {exc}")
         if session:
             session.logout()
